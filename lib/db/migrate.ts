@@ -4,8 +4,10 @@ import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 
 // Load env from common locations to match app runtime
-config({ path: '.env.local' });
-config({ path: '.env' });
+const localEnv = config({ path: '.env.local' });
+console.log('Loaded .env.local:', localEnv.error ? 'Error' : 'Success');
+const dotEnv = config({ path: '.env' });
+console.log('Loaded .env:', dotEnv.error ? 'Error' : 'Success');
 config({ path: '.env.l' });
 
 const runMigrate = async () => {
