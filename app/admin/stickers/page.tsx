@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
+import { generateShortLink } from './actions';
 
 export default function AdminStickersPage() {
   const [url, setUrl] = useState('https://aporto.tech');
@@ -18,6 +19,16 @@ export default function AdminStickersPage() {
 
   const handlePrint = () => {
     window.print();
+  };
+
+  const handleGenerateLink = async () => {
+    try {
+      const newLink = await generateShortLink();
+      setUrl(newLink);
+    } catch (e) {
+      console.error(e);
+      alert('Failed to generate link');
+    }
   };
 
   // Generate an array for the grid
@@ -41,6 +52,14 @@ export default function AdminStickersPage() {
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="https://..."
                 />
+                <Button 
+                  onClick={handleGenerateLink} 
+                  variant="outline" 
+                  size="sm"
+                  className="w-full mt-2"
+                >
+                  Generate Unique Link
+                </Button>
               </div>
 
               <div className="space-y-2">
