@@ -1,7 +1,5 @@
 import {
   convertToModelMessages,
-  createUIMessageStream,
-  JsonToSseTransformStream,
   streamText,
 } from 'ai';
 import { auth, } from '@/app/(auth)/auth';
@@ -487,145 +485,106 @@ export async function POST(request: Request) {
     const streamId = generateUUID();
     await createStreamId({ streamId, chatId });
 
-    // Debug path: bypass UI stream and return raw provider stream directly
-    if (debugRaw) {
-      const uiMessages = convertToUIMessages(messages);
-      const modelMessages = convertToModelMessages(uiMessages);
-      const normalizedModelId = (() => {
-        if (/^gpt-4o-mini/.test(selectedChatModel)) return 'gpt-4o-mini';
-        if (/^gpt-4o(?!-mini)/.test(selectedChatModel)) return 'gpt-4o';
-        return selectedChatModel;
-      })();
-      const effectiveModelId =
-        normalizedModelId.startsWith('o3-') || normalizedModelId.startsWith('o1-')
-          ? 'gpt-4o-mini'
-          : normalizedModelId;
-      const model = getProviderByModelId(effectiveModelId);
-      const result = await streamText({
-        model: model as any,
-        system: systemPrompt({ selectedChatModel, requestHints }),
-        messages: modelMessages,
-      });
-      const resp = (result as any).toAIStreamResponse?.() || (result as any).toDataStreamResponse?.();
-      if (resp) return resp as Response;
-      const readable = (result as any).toReadableStream?.();
-      if (readable) return new Response(readable as ReadableStream);
-      // Fallback to UI stream if no helper available
-    }
+    // Standard usage for AI SDK:
+    const normalizedModelId = selectedChatModel.startsWith('gpt-4o') && !selectedChatModel.includes('mini') ? 'gpt-4o' 
+      : selectedChatModel.includes('gpt-4o-mini') ? 'gpt-4o-mini' 
+      : selectedChatModel;
+      
+    const effectiveModelId = normalizedModelId.startsWith('o3-') || normalizedModelId.startsWith('o1-')
+        ? 'gpt-4o-mini'
+        : normalizedModelId;
 
-    // For OpenRouter namespaced models, use the unified UI stream merge below
+    const model = getProviderByModelId(effectiveModelId);
 
-    const stream = createUIMessageStream({
-      execute: async (messageStream) => {
-        console.log('Starting execute function...');
-
+    const result = await streamText({
+      model: model as any,
+      system: systemPrompt({ selectedChatModel, requestHints }),
+      messages: await convertToModelMessages(uiMessages),
+      onFinish: async ({ response }) => {
         try {
-          const modelMessages = convertToModelMessages(uiMessages);
-          const msgDebug = modelMessages.map((m, idx) => {
-            const blocks = Array.isArray(m.content) ? m.content : [];
-            const texts = blocks
-              .filter((b: any) => b && b.type === 'text')
-              .map((b: any) => (b.text || '').slice(0, 200));
-            return {
-              idx,
-              role: m.role,
-              blocks: blocks.map((b: any) => b?.type),
-              textPreview: texts.join(' ').slice(0, 200),
-              blocksCount: blocks.length,
-              textBlocksCount: texts.length,
-            };
-          });
-          const lastUser = [...modelMessages].reverse().find((m: any) => m.role === 'user');
-          const lastUserContent = Array.isArray(lastUser?.content) ? (lastUser?.content as any[]) : [];
-          const lastUserText = lastUserContent
-            .filter((b: any) => b && b.type === 'text')
-            .map((b: any) => b.text || '')
-            .join('')
-            .trim();
+          // Save assistant message after generation
+          const responseMessages = response.messages;
+          if (responseMessages && responseMessages.length > 0) {
+             // Find the first assistant message
+             const assistantMessage = responseMessages.find(m => m.role === 'assistant');
+             if (assistantMessage) {
+                 const content = assistantMessage.content;
+                 let textContent = '';
+                 
+                 if (typeof content === 'string') {
+                     textContent = content;
+                 } else if (Array.isArray(content)) {
+                     textContent = content
+                        .filter(c => c.type === 'text')
+                        .map(c => c.text)
+                        .join('\n');
+                 }
 
-          console.log('LLM request (deep):', {
-            model: selectedChatModel,
-            systemPreview: systemPrompt({ selectedChatModel, requestHints }).slice(0, 200),
-            messages: msgDebug,
-            lastUserHasText: !!lastUserText,
-            lastUserTextPreview: (lastUserText || '').slice(0, 200),
-          });
-
-          // Normalize common dated OpenAI model ids to canonical ids
-          const normalizedModelId = (() => {
-            if (/^gpt-4o-mini/.test(selectedChatModel)) return 'gpt-4o-mini';
-            if (/^gpt-4o(?!-mini)/.test(selectedChatModel)) return 'gpt-4o';
-            return selectedChatModel;
-          })();
-
-          const effectiveModelId =
-            normalizedModelId.startsWith('o3-') || normalizedModelId.startsWith('o1-')
-              ? 'gpt-4o-mini'
-              : normalizedModelId;
-          console.log('About to call LLM with model:', selectedChatModel, 'normalized:', normalizedModelId, 'effective:', effectiveModelId);
-          const model = getProviderByModelId(effectiveModelId);
-          console.log('Model object:', model);
-
-          if (!lastUserText) {
-            console.warn('Abort: last user text is empty, nothing to answer');
-            throw new Error('Empty user text');
+                 if (textContent) {
+                     await saveMessages({
+                        messages: [
+                          {
+                            id: generateUUID(), // Assistant message ID might not be in response, generate new
+                            chatId,
+                            role: 'assistant',
+                            parts: [{ type: 'text', text: textContent }],
+                            createdAt: new Date(),
+                            attachments: [],
+                          }
+                        ]
+                     });
+                 }
+             }
           }
-
-          const result = await streamText({
-            model: model as any,
-            system: systemPrompt({ selectedChatModel, requestHints }),
-            messages: modelMessages,
-          });
-          console.log('streamText completed, result:', result);
-
-          // Do NOT consume the stream before merging; merging will stream tokens to the client
-
-          // debugRaw handled before creating UI stream
-
-          console.log('About to merge message stream (reverted to SDK merge)...');
-          messageStream.writer.merge(
-            result.toUIMessageStream({
-              sendReasoning: false,
-            }),
-          );
-          console.log('Message stream merged');
-        } catch (error) {
-          console.error('Error in execute function:', error);
-          console.error('Error details:', {
-            name: error.name,
-            message: error.message,
-            stack: error.stack,
-          });
-          throw error;
+        } catch (e) {
+          console.error('Failed to save assistant message:', e);
         }
-      },
-      onError: (error) => {
-        console.error('Stream error:', error);
-        console.error('Stream error details:', {
-          name: error instanceof Error ? error.name : 'Unknown',
-          message: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : 'No stack',
-        });
-        // Suppress emitting fallback text into the stream
-        return '';
-      },
+      }
     });
 
-    const streamContext = getStreamContext();
+    // Manual Data Stream implementation to support useChat default protocol
+    const stream = result.fullStream;
+    const encoder = new TextEncoder();
+    
+    const readable = new ReadableStream({
+        async start(controller) {
+            try {
+                for await (const part of stream) {
+                    if (part.type === 'text-delta') {
+                        controller.enqueue(encoder.encode(`0:${JSON.stringify(part.text)}\n`));
+                    } else if (part.type === 'tool-call') {
+                         const toolCall = {
+                             toolCallId: part.toolCallId,
+                             toolName: part.toolName,
+                             args: (part as any).args || part.input
+                         };
+                         controller.enqueue(encoder.encode(`9:${JSON.stringify(toolCall)}\n`));
+                    }
+                    // Add other part types (data, error, etc) as needed for full v6 compliance
+                    // specific types: 
+                    // 0: text
+                    // 1: data (e.g. usage)
+                    // 2: error
+                    // 3: tool-call
+                    // etc. Protocol details: https://sdk.vercel.ai/docs/reference/ai-sdk-ui/data-stream-protocol
+                }
+            } catch (error) {
+                console.error('Stream processing error:', error);
+                // 3 is 'error' part in some versions, or explicitly '3:"error message"'
+            } finally {
+                controller.close();
+            }
+        }
+    });
+    
+    return new Response(readable, {
+        headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-Vercel-AI-Data-Stream': 'v1'
+        }
+    });
 
-    console.log('About to return response...');
-    if (streamContext) {
-      const response = await streamContext.resumableStream(streamId, () =>
-        stream.pipeThrough(new JsonToSseTransformStream()),
-      );
-      console.log('Returning resumable stream response');
-      return new Response(response, { status: 200 });
-    } else {
-      console.log('Returning regular stream response');
-      return new Response(stream.pipeThrough(new JsonToSseTransformStream()), {
-        status: 200,
-      });
-    }
+    // Response is handled by createDataStreamResponse directly above
   } catch (error) {
     console.error('Chat API error:', error);
     console.error(

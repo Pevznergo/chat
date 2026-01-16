@@ -102,7 +102,7 @@ export function ShareModal({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Share2 className="h-5 w-5" />
+            <Share2 className="size-5" />
             {title}
           </DialogTitle>
         </DialogHeader>
@@ -126,7 +126,7 @@ export function ShareModal({
                   isCopied ? 'bg-green-100 border-green-300 text-green-700' : ''
                 }`}
               >
-                {isCopied ? '✓' : <Copy className="h-4 w-4" />}
+                {isCopied ? '✓' : <Copy className="size-4" />}
               </Button>
             </div>
           </div>

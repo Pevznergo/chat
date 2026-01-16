@@ -33,7 +33,7 @@ export async function generateShortLink() {
     const existing = await db
       .select()
       .from(invites)
-      .where(eq(invites.code, code))
+      .where(eq(invites.code, code) as any)
       .limit(1);
     
     if (existing.length === 0) {
@@ -67,19 +67,13 @@ export async function generateShortLink() {
   return `${baseUrl}/i/${newInvite.code}`;
 }
 
-export async function generateShortLinks(count: number) {
+export async function generateShortLinks(count: number, note?: string) {
   const session = await auth();
   if (!session?.user) {
     throw new Error('Unauthorized');
   }
 
   const generatedLinks = [];
-  const MAX_BATCH_SIZE = 50; // Generate in chunks to avoid massive queries/inserts if needed, but here we loop
-  
-  // For simplicity in this specific user request context, we'll generate one by one or in small batches.
-  // Ideally, we'd generate N codes, check uniqueness, and insert. 
-  // Given the collision probability is low for 6 chars, we can try to generate valid invites in a loop.
-  
   const baseUrl = process.env.NEXTAUTH_URL || 'https://aporto.tech';
 
   for (let i = 0; i < count; i++) {
@@ -90,13 +84,10 @@ export async function generateShortLinks(count: number) {
 
     // A simple retry mechanism
     while (!unique && attempts < 5) {
-        // Optimization: In a real high-perf scenario, we would cache existing codes or use a bloom filter.
-        // For < 200 items, checking DB is acceptable but slow. 
-        // Let's assume low collision rate.
-         const existing = await db
+        const existing = await db
         .select()
         .from(invites)
-        .where(eq(invites.code, code))
+        .where(eq(invites.code, code) as any)
         .limit(1);
         
         if (existing.length === 0) {
@@ -114,6 +105,7 @@ export async function generateShortLinks(count: number) {
             owner_user_id: session.user.id,
             available_count: 999999,
             used_count: 0,
+            note: note || null, // Store the note/label
          } as any);
          
          generatedLinks.push(`${baseUrl}/i/${code}`);
@@ -122,4 +114,37 @@ export async function generateShortLinks(count: number) {
 
   revalidatePath('/admin/stickers');
   return generatedLinks;
+}
+
+export async function getInvites(limit = 100, offset = 0) {
+    const session = await auth();
+    if (!session?.user) throw new Error('Unauthorized');
+
+    // Fetch invites ordered by creation date desc
+    // We import desc from drizzle-orm
+    const { desc } = await import('drizzle-orm');
+    
+    return await db.select()
+        .from(invites)
+        .orderBy(desc(invites.created_at) as any)
+        .limit(limit)
+        .offset(offset);
+}
+
+export async function deleteInvite(id: string) {
+    const session = await auth();
+    if (!session?.user) throw new Error('Unauthorized');
+
+    await db.delete(invites).where(eq(invites.id, id) as any);
+    revalidatePath('/admin/stickers');
+}
+
+export async function updateInvite(id: string, note: string) {
+    const session = await auth();
+    if (!session?.user) throw new Error('Unauthorized');
+
+    await db.update(invites)
+        .set({ note } as any)
+        .where(eq(invites.id, id) as any);
+    revalidatePath('/admin/stickers');
 }

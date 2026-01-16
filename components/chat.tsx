@@ -322,8 +322,50 @@ export function Chat({
         console.log('[Chat.safeAppend] normalized payload:', withId);
         try {
           return await appendRaw(withId);
-        } catch (err) {
+        } catch (err: any) {
           console.error('[Chat.safeAppend] append failed:', err);
+
+          if (err?.message?.includes('Guest message limit exceeded')) {
+            let assistantText = 'Достигнут лимит сообщений для гостевого пользователя. Пожалуйста, зарегистрируйтесь.';
+            try {
+              const parsed = JSON.parse(err.message);
+              if (parsed?.message && typeof parsed.message === 'string') {
+                assistantText = parsed.message;
+              }
+            } catch {}
+
+            // Превращаем "зарегистрируйтесь" в ссылку
+            assistantText = assistantText.replace(/зарегистрируйтесь/gi, '[зарегистрируйтесь](/register)');
+            
+            const assistantMessage = {
+              id: generateUUID(),
+              role: 'assistant' as const,
+              parts: [{ type: 'text' as const, text: assistantText }],
+              content: assistantText,
+              attachments: [],
+            };
+
+            setMessages((prev: any[]) => [...prev, assistantMessage]);
+
+            try {
+              await fetchWithErrorHandlers('/api/message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chatId: id,
+                  message: {
+                    id: assistantMessage.id,
+                    role: 'assistant',
+                    content: assistantText,
+                  },
+                }),
+              });
+            } catch (e) {
+              console.error('Failed to persist guest limit message:', e);
+            }
+            return;
+          }
+
           toast({ type: 'error', description: 'Не удалось отправить сообщение' });
         }
       }

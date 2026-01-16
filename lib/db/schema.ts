@@ -256,6 +256,7 @@ export const invites = pgTable('invites', {
     .references(() => user.id),
   available_count: integer('available_count').notNull().default(4),
   used_count: integer('used_count').notNull().default(0),
+  note: text('note'),
   created_at: timestamp('created_at').notNull().defaultNow(),
 });
 

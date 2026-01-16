@@ -1,0 +1,1 @@
+ALTER TABLE "User" ADD COLUMN "task_all_completed" boolean DEFAULT false;
